@@ -1,0 +1,280 @@
+/*******************************************************************************************
+  SIMPL+ Module Information
+  (Fill in comments below)
+*******************************************************************************************/
+/*
+Programmer: NAS
+Comments: 
+*/
+
+/*******************************************************************************************
+  Compiler Directives
+  (Uncomment and declare compiler directives as needed)
+*******************************************************************************************/
+#ENABLE_DYNAMIC
+#DEFINE_CONSTANT    AV       0
+#DEFINE_CONSTANT    Audio    1
+#DEFINE_CONSTANT    Video    2
+#CATEGORY "46" "NAS-Generic" // Custom
+#OUTPUT_SHIFT 		2
+#DEFAULT_VOLATILE
+#ENABLE_STACK_CHECKING
+#ENABLE_TRACE
+// #PRINT_TO_TRACE
+
+#HELP_BEGIN
+>SRC Index:
+ 0=       break audio & video
+ 1-99=    video source input value
+ 100=     break video
+ 101-199= audio source input value
+ 200=     break audio
+ 301-399= specific source considerations (see below)
+     -301: vtc
+
+
+For display controls, format is as follows:
+ [*disp:01*pwr:on*] = display #1 power on
+ [*disp:06*pwr:off*] = display #6 power off
+ [*disp:all*pwr:on*] = all displays power on
+
+For destination popup control, format is as follows:
+ [*dest:00*] = hide popup
+ [*dest:01*] = show popup
+#HELP_END
+
+/*******************************************************************************************
+  DIGITAL, ANALOG and SERIAL INPUTS and OUTPUTS
+  (Uncomment and declare inputs and outputs as needed)
+*******************************************************************************************/
+ DIGITAL_INPUT 
+_SKIP_,
+_SKIP_,
+SysReset,
+LockoutFb,
+SyncFb,
+SignageModeFb,
+VTCSharingFb,
+CombinedFb;	// 
+ ANALOG_INPUT 
+SRCInputVal,
+DestVal,
+CustDestOpt;
+// STRING_INPUT 
+// BUFFER_INPUT 
+
+// DIGITAL_OUTPUT 
+ STRING_OUTPUT 
+CMD_Out$;
+ ANALOG_OUTPUT 
+DMVid[8],
+DMAud[8];
+
+/*******************************************************************************************
+  Parameters
+  (Uncomment and declare parameters as needed)
+*******************************************************************************************/
+ INTEGER_PARAMETER
+VC[2,2];
+// SIGNED_INTEGER_PARAMETER
+// LONG_INTEGER_PARAMETER
+// SIGNED_LONG_INTEGER_PARAMETER
+// STRING_PARAMETER
+
+/*******************************************************************************************
+  Parameter Properties
+  (Uncomment and declare parameter properties as needed)
+*******************************************************************************************/
+#BEGIN_PARAMETER_PROPERTIES VC
+	propValidUnits = unitDecimal;// unitString or unitDecimal|unitHex|unitPercent|unitCharacter|unitTime|unitTicks;
+	propDefaultUnit = unitDecimal;// unitString, unitDecimal, unitHex, unitPercent, unitCharacter, unitTime or unitTicks;
+	propBounds = 0d, 32d;
+   // propDefaultValue = ;  // or, propDefaultValue = "";
+   // propList = // { "value" , "label" } , { "value" , "label" } , ... ;
+   // propShortDescription = "status_bar_hint_text";
+	#BEGIN_PROP_FULL_DESCRIPTION "Input Index on DM switcher for Primary and Secondary VC Inputs" #END_PROP_FULL_DESCRIPTION
+	#BEGIN_PROP_NOTES "Input Index on DM switcher for Primary and Secondary VC Inputs"  #END_PROP_NOTES
+#END_PARAMETER_PROPERTIES
+
+/*******************************************************************************************
+  Global Variables
+  (Uncomment and declare global variables as needed)
+  Note:  Be sure to initialize all declared STRING variables as needed
+         For example, in Function Main: myString = "";
+*******************************************************************************************/
+// INTEGER
+// LONG_INTEGER
+// SIGNED_INTEGER
+// SIGNED_LONG_INTEGER
+// STRING
+
+/*******************************************************************************************
+  Functions
+  (Add any additional functions here)
+  Note:  Functions must be physically placed before the location in
+         the code that calls them.
+*******************************************************************************************/
+FUNCTION RouteVideo( integer val )
+	{
+	integer x;
+	FOR( x=1 TO 8 )		// video dest
+		{
+		IF( CustDestOpt&(1<<(16-x)) )	// if dest is enabled & source has video
+			{
+			DMVid[x]= val;
+			IF( val )
+				MAKESTRING( CMD_Out$,"[*disp:%02u*pwr:on*]",x );
+			}
+		}
+	}
+	
+FUNCTION RouteAudio( integer val )
+	{
+	integer x;
+	FOR( x=9 TO 16 )	// audio dest
+		{
+		IF( CustDestOpt&(1<<(16-x)) && x=10 )
+			DMAud[x-8]= 2;	
+		ELSE IF( CustDestOpt&(1<<(16-x)) )	// if dest is enabled & source has audio with video
+			DMAud[x-8]= val;
+		}
+	}
+
+FUNCTION Destroy( INTEGER Type )
+    {
+    SWITCH( Type )
+        {
+        CASE( AV ):
+            {
+			RouteVideo(0);
+			RouteAudio(0);
+			if( CombinedFb && SignageModeFb )
+				CMD_Out$= "[*disp:02*input:dvi*]";
+			else if( CombinedFb )
+				CMD_Out$= "[*disp:02*pwr:off*]";
+            }
+        CASE( Audio ):
+			RouteAudio(0);
+        CASE( Video ):
+			RouteVideo(0);
+        }
+    }
+
+FUNCTION RoutingLogic()
+	{
+    INTEGER x;
+    
+	IF( !LockoutFb && SRCInputVal )
+		{
+        SWITCH( SRCInputVal )
+            {
+            CASE( 301 ):    // vtc
+                {
+				IF( !VTCSharingFb )
+                	DMAud[1]= 0;
+
+				FOR( x=1 TO 8 )		// video dest
+					{
+					IF( CustDestOpt&(1<<(16-x)) && (x%2 || VC[2]=0) )	// if dest is enabled & index is odd
+						{
+						DMVid[x]= VC[1];
+						MAKESTRING( CMD_Out$,"[*disp:%02u*pwr:on*]",x );
+						}
+					ELSE IF( CustDestOpt&(1<<(16-x)) )	// if dest is enabled
+						{
+						DMVid[x]= VC[2];
+						MAKESTRING( CMD_Out$,"[*disp:%02u*pwr:on*]",x );
+						}
+					}
+				}
+            DEFAULT:
+                {
+                IF( SyncFb )	// system mode= "synced destinations"
+					{
+	                IF( SRCInputVal<200 )	// if dest is enabled & source has video
+						RouteVideo( SRCInputVal%100 );
+
+					IF( SRCInputVal<100 )	// if dest is enabled & source has audio with video
+						RouteAudio( SRCInputVal%100 );
+					ELSE IF( SRCInputVal>=100 )
+						RouteAudio( 0 );
+					}
+                ELSE IF( SRCInputVal<100 )
+                    CMD_Out$= "[*dest:01*]";	// show dest popup
+		        ELSE
+		            {
+		            CMD_Out$= "[*dest:00*]";	// hide dest popup
+		            IF( SRCInputVal=100 )
+		                Destroy( Video );
+		            ELSE IF( SRCInputVal=200 )
+		                Destroy( Audio );
+		            }
+                }
+            }        
+		}
+	}
+
+/*******************************************************************************************
+  Event Handlers
+  (Uncomment and declare additional event handlers as needed)
+*******************************************************************************************/
+PUSH SysReset
+	{
+	Destroy( AV );
+	//CMD_Out$= "[*disp:all*pwr:off*]";	// 
+	}
+
+PUSH LockoutFb
+	{
+	CMD_Out$= "[*dest:00*]";	// hide dest popup
+	}
+
+PUSH CombinedFb
+	{
+	DMAud[2]= 2;
+	DMVid[2]= DMVid[1];
+	if( DMVid[1] )
+		CMD_Out$= "[*disp:02*pwr:on*]";
+	}
+RELEASE CombinedFb
+	{
+	DMAud[2]= 2;
+	DMVid[2]= 0;
+//	CMD_Out$= "[*disp:02*pwr:off*]";
+	}
+
+CHANGE SRCInputVal
+	{
+	IF( !LockoutFb && SRCInputVal>=60000 )	// ie: 61102 = audio input #11 & video input #2
+		{
+		RouteAudio( (SRCInputVal-60000)/100 );	// ie: 60500 = audio input #5
+		RouteVideo( (SRCInputVal-60000)%100 );	// ie: 60012 = video input #12
+		}
+	ELSE
+		RoutingLogic();
+	}
+
+CHANGE DestVal       // audio and video are treated as seperate destinations
+	{
+    IF( DestVal/100 )    // AUDIO DEST
+        DMAud[1]= SRCInputVal%100;
+    ELSE      // VIDEO DEST
+        {
+        DMVid[DestVal]= SRCInputVal%100;
+		IF( SRCInputVal%100 )
+	        MAKESTRING( CMD_Out$,"[*disp:%02u*pwr:on*]",DestVal );
+		RouteAudio( SRCInputVal%100 );
+        }
+	}
+
+/*******************************************************************************************
+  Main()
+  Uncomment and place one-time startup code here
+  (This code will get called when the system starts up)
+*******************************************************************************************/
+/*
+Function Main()
+	{
+    // WaitForInitializationComplete();
+	}
+*/
